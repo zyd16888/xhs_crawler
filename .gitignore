@@ -3,3 +3,4 @@ tests
 __pycache__
 *.pyc
 xchina_crawler\__pycache__
+config.yaml
