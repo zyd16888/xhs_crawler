@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import time
 from typing import Any
+from urllib.parse import urljoin
 
 from .config import load_config
 from .db import (
@@ -31,6 +32,8 @@ from .db import (
     insert_list_observation,
     insert_raw_page,
     upsert_download_page,
+    update_video_download_links,
+    update_video_series,
     update_video_detail,
     update_video_stream_links,
     upsert_taxonomy_node,
@@ -45,6 +48,36 @@ from .sanitize import sanitize_html
 NODE_TYPE_SERIES = "video_series"
 
 LOG = logging.getLogger("xchina_crawler")
+
+_RE_BREADCRUMB_SERIES = re.compile(r"/videos/series-([a-f0-9]{8,})(?:/\d+\.html|\.html)", re.I)
+
+
+def _pick_specific_series_from_breadcrumbs(*, current_series_id: str, breadcrumbs: list[Any]) -> tuple[str, str] | None:
+    """
+    从 BreadcrumbList 中挑出“最具体”的 series（通常是最后一个 series 链接）。
+
+    返回值用于纠正 crawl-board 聚合列表页下的 video_series_* 字段：
+    - 当 breadcrumbs 里有多个 series（板块 + 子分类）时，取最后一个（子分类）
+    - 当只有一个 series 时，仅在它等于当前列表页 series_id 时才采纳（避免误覆盖）
+    """
+
+    matches: list[tuple[str, str]] = []
+    for bc in breadcrumbs:
+        item = getattr(bc, "item", "") or ""
+        m = _RE_BREADCRUMB_SERIES.search(item)
+        if not m:
+            continue
+        sid = m.group(1)
+        name = (getattr(bc, "name", "") or "").strip() or f"series-{sid}"
+        matches.append((sid, name))
+
+    if not matches:
+        return None
+
+    sid, name = matches[-1]
+    if len(matches) >= 2 or sid == current_series_id:
+        return sid, name
+    return None
 
 
 def _setup_logging(level: str) -> None:
@@ -349,6 +382,20 @@ def _crawl_series_pages(
                     m3u8_url=dl_parsed.m3u8_url,
                     poster_url=dl_parsed.poster_url,
                 )
+                update_video_download_links(
+                    db,
+                    video_id=card.video_id,
+                    magnet_uri=dl_parsed.magnet_uri,
+                    torrent_url=(urljoin(dl_url, dl_parsed.torrent_url) if dl_parsed.torrent_url else None),
+                )
+                picked = _pick_specific_series_from_breadcrumbs(
+                    current_series_id=series_id, breadcrumbs=dl_parsed.breadcrumbs
+                )
+                if picked:
+                    sid, sname = picked
+                    update_video_series(
+                        db, video_id=card.video_id, video_series_name=sname, video_series_source_key=sid
+                    )
 
             if crawl_video_detail:
                 detail_cached = None
@@ -401,7 +448,7 @@ def _crawl_series_pages(
 
                 # taxonomy from breadcrumb: try to map /videos/series-<id>.html items
                 for bc in vparsed.breadcrumbs:
-                    m = re.search(r"/videos/series-([a-f0-9]{8,})\.html", bc.item or "", re.I)
+                    m = _RE_BREADCRUMB_SERIES.search(bc.item or "")
                     if m:
                         sid = m.group(1)
                         tid = get_taxonomy_node_id(db, node_type=NODE_TYPE_SERIES, source_key=sid)
@@ -416,6 +463,14 @@ def _crawl_series_pages(
                                 item_count_hint=None,
                             )
                         upsert_video_taxonomy(db, video_id=vparsed.video_id, node_id=tid, source="breadcrumb")
+                picked = _pick_specific_series_from_breadcrumbs(
+                    current_series_id=series_id, breadcrumbs=vparsed.breadcrumbs
+                )
+                if picked:
+                    sid, sname = picked
+                    update_video_series(
+                        db, video_id=vparsed.video_id, video_series_name=sname, video_series_source_key=sid
+                    )
 
                 if crawl_video_download:
                     download_path = f"/download/id-{vparsed.video_id}.html"
@@ -466,6 +521,12 @@ def _crawl_series_pages(
                         m3u8_url=dl_parsed.m3u8_url,
                         poster_url=dl_parsed.poster_url,
                     )
+                    update_video_download_links(
+                        db,
+                        video_id=vparsed.video_id,
+                        magnet_uri=dl_parsed.magnet_uri,
+                        torrent_url=(urljoin(dl_url, dl_parsed.torrent_url) if dl_parsed.torrent_url else None),
+                    )
 
         futures = []
         executor = None
@@ -485,6 +546,7 @@ def _crawl_series_pages(
                     cover_url=card.cover_url,
                     video_series_name=parsed.series_name,
                     video_series_source_key=series_id,
+                    video_tags=card.tags,
                 )
                 upsert_video_taxonomy(db, video_id=card.video_id, node_id=node_id, source="list_page")
                 insert_list_observation(

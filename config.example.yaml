@@ -1,0 +1,34 @@
+# 爬虫配置示例：复制为 config.yaml 后按需修改
+
+database_url: "postgresql://postgres:postgres@127.0.0.1:5432/xchina"
+
+# 抓取 HTML 的域名列表（按顺序 failover）
+base_urls:
+  - "https://xchina.co"
+  - "https://xchina001.online"
+
+logging:
+  level: "INFO"
+
+http:
+  user_agent: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Mobile Safari/537.36"
+  referer: "https://xchina.co/"
+  timeout_seconds: 30
+  retries: 3
+  sleep_seconds: 0.3
+
+crawl:
+  # 默认抓取策略（尽量减少命令行参数）
+  with_detail: false
+  with_download: false
+  store_raw: false
+
+  # raw_pages 快照复用（URL 命中则不再发请求；注意直链在 raw_pages 中会被脱敏替换）
+  use_raw_cache: false
+  raw_cache_max_age_seconds: 0
+
+  # 一直翻页直到 last_page
+  all_pages: false
+
+  # 并发线程数（用于详情/下载页抓取）
+  workers: 4

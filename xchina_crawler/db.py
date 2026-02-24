@@ -148,6 +148,7 @@ def upsert_video_base(
     cover_url: str | None,
     video_series_name: str | None = None,
     video_series_source_key: str | None = None,
+    video_tags: list[str] | None = None,
 ) -> None:
     """
     upsert 视频基础信息（通常来自列表页）。
@@ -161,7 +162,10 @@ def upsert_video_base(
         cover_url: 封面 URL（可为空）
         video_series_name: 当前抓取上下文下的 series 名称（可为空）
         video_series_source_key: 当前抓取上下文下的 series id（可为空）
+        video_tags: 列表页 tags 纯文本项（可为空）
     """
+
+    tags_json = json.dumps(video_tags, ensure_ascii=False) if video_tags else None
 
     with db.connect() as conn:
         with conn.cursor() as cur:
@@ -170,9 +174,10 @@ def upsert_video_base(
 insert into videos (
   video_id, title, page_url, canonical_url, cover_url,
   video_series_name, video_series_source_key,
+  video_tags,
   created_at, updated_at
 )
-values (%s, %s, %s, %s, %s, %s, %s, now(), now())
+values (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())
 on conflict (video_id) do update set
   title = coalesce(excluded.title, videos.title),
   page_url = coalesce(excluded.page_url, videos.page_url),
@@ -180,9 +185,19 @@ on conflict (video_id) do update set
   cover_url = coalesce(excluded.cover_url, videos.cover_url),
   video_series_name = coalesce(excluded.video_series_name, videos.video_series_name),
   video_series_source_key = coalesce(excluded.video_series_source_key, videos.video_series_source_key),
+  video_tags = coalesce(excluded.video_tags, videos.video_tags),
   updated_at = now()
                 """,
-                (video_id, title, page_url, canonical_url, cover_url, video_series_name, video_series_source_key),
+                (
+                    video_id,
+                    title,
+                    page_url,
+                    canonical_url,
+                    cover_url,
+                    video_series_name,
+                    video_series_source_key,
+                    tags_json,
+                ),
             )
         conn.commit()
 
@@ -307,6 +322,75 @@ on conflict (video_id) do update set
   updated_at = now()
                 """,
                 (video_id, m3u8_url, poster_url),
+            )
+        conn.commit()
+
+
+def update_video_download_links(
+    db: Db,
+    *,
+    video_id: str,
+    magnet_uri: str | None,
+    torrent_url: str | None,
+) -> None:
+    """
+    单独更新 videos 表里的 download 页链接字段（magnet/torrent）。
+    """
+
+    if not magnet_uri and not torrent_url:
+        return
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+insert into videos (video_id, video_magnet_uri, video_torrent_url, created_at, updated_at)
+values (%s, %s, %s, now(), now())
+on conflict (video_id) do update set
+  video_magnet_uri = case when excluded.video_magnet_uri is not null then excluded.video_magnet_uri else videos.video_magnet_uri end,
+  video_torrent_url = case when excluded.video_torrent_url is not null then excluded.video_torrent_url else videos.video_torrent_url end,
+  updated_at = now()
+                """,
+                (video_id, magnet_uri, torrent_url),
+            )
+        conn.commit()
+
+
+def update_video_series(
+    db: Db,
+    *,
+    video_id: str,
+    video_series_name: str | None,
+    video_series_source_key: str | None,
+) -> None:
+    """
+    更新 videos 表里的“影片具体所属 series”（用于纠正列表页的抓取上下文）。
+
+    适用场景：
+    - crawl-board 抓板块聚合列表页时，列表页无法精确区分子分类；
+      但详情页/下载页的 JSON-LD BreadcrumbList 往往包含具体子分类 series。
+    """
+
+    if not video_series_source_key:
+        return
+
+    series_name = (video_series_name or "").strip() or f"series-{video_series_source_key}"
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+insert into videos (
+  video_id, video_series_name, video_series_source_key,
+  created_at, updated_at
+)
+values (%s, %s, %s, now(), now())
+on conflict (video_id) do update set
+  video_series_name = excluded.video_series_name,
+  video_series_source_key = excluded.video_series_source_key,
+  updated_at = now()
+                """,
+                (video_id, series_name, video_series_source_key),
             )
         conn.commit()
 

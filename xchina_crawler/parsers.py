@@ -197,6 +197,7 @@ class VideoCard:
         title: 标题（可能为空）
         page_path: 详情页路径（相对）
         cover_url: 封面 URL（从 style background-image 提取）
+        tags: 列表页 tags 的纯文本项（已过滤图标/空占位等）
         badge: 卡片 tags 的第一项（如“杏吧原版”）
         duration_text: 卡片显示的时长文本
         duration_seconds: 卡片时长转换为秒
@@ -208,6 +209,7 @@ class VideoCard:
     title: str | None
     page_path: str
     cover_url: str | None
+    tags: list[str]
     badge: str | None
     duration_text: str | None
     duration_seconds: int | None
@@ -354,6 +356,26 @@ def _parse_series_page_bs4(path: str, html: str) -> SeriesPageParsed:
         if img_div:
             cover_url = _extract_bg_image_url(img_div.get("style"))
 
+        tags: list[str] = []
+        tags_div = item.select_one("div.tags")
+        if tags_div:
+            seen: set[str] = set()
+            for div in tags_div.find_all("div", recursive=False):
+                classes = set(div.get("class") or [])
+                if "empty" in classes:
+                    continue
+                # 排除：磁链/评论/时长等（通常带 <i> 图标）
+                if div.find("i") is not None:
+                    continue
+                t = div.get_text(" ", strip=True) or ""
+                t = t.strip()
+                if not t:
+                    continue
+                if t in seen:
+                    continue
+                seen.add(t)
+                tags.append(t)
+
         badge = None
         badge_div = item.select_one("div.tags > div")
         if badge_div:
@@ -385,6 +407,7 @@ def _parse_series_page_bs4(path: str, html: str) -> SeriesPageParsed:
                 title=title,
                 page_path=page_path,
                 cover_url=cover_url,
+                tags=tags,
                 badge=badge,
                 duration_text=duration_text,
                 duration_seconds=duration_seconds,
@@ -484,6 +507,8 @@ class DownloadPageParsed:
     canonical_url: str | None
     m3u8_url: str | None
     poster_url: str | None
+    magnet_uri: str | None
+    torrent_url: str | None
     has_download_section: bool
     has_magnet_button: bool
     has_torrent_button: bool
@@ -708,6 +733,16 @@ def parse_download_page(html: str) -> DownloadPageParsed:
     has_magnet_button = bool(soup.select_one("a.btn.magnet"))
     has_torrent_button = bool(soup.select_one("a.btn.download"))
 
+    magnet_uri = None
+    magnet_a = soup.select_one("a.btn.magnet[href^='magnet:']") or soup.select_one("a[href^='magnet:']")
+    if magnet_a and magnet_a.get("href"):
+        magnet_uri = str(magnet_a.get("href")).strip() or None
+
+    torrent_url = None
+    torrent_a = soup.select_one("a.btn.download[href]") or soup.select_one("a[href$='.torrent']")
+    if torrent_a and torrent_a.get("href"):
+        torrent_url = str(torrent_a.get("href")).strip() or None
+
     m3u8_url = _extract_first_m3u8_url(html)
     poster_url = _extract_first_poster_url(html)
     if not poster_url:
@@ -781,6 +816,8 @@ def parse_download_page(html: str) -> DownloadPageParsed:
         canonical_url=canonical_url,
         m3u8_url=m3u8_url,
         poster_url=poster_url,
+        magnet_uri=magnet_uri,
+        torrent_url=torrent_url,
         has_download_section=has_download_section,
         has_magnet_button=has_magnet_button,
         has_torrent_button=has_torrent_button,
