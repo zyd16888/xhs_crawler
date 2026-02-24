@@ -211,6 +211,7 @@ def update_video_detail(
     canonical_url: str | None,
     cover_url: str | None,
     screenshot_url: str | None,
+    screenshot_urls: list[str] | None,
     upload_date: datetime | None,
     duration_seconds: int | None,
     content_rating: str | None,
@@ -231,6 +232,7 @@ def update_video_detail(
         canonical_url: canonical URL
         cover_url: 封面 URL
         screenshot_url: 截图 URL
+        screenshot_urls: 多张截图 URL（可为空）
         m3u8_url: 播放 m3u8 链接（可为空）
         poster_url: 播放器 poster 链接（可为空）
         upload_date: 上传时间（来自 JSON-LD）
@@ -246,13 +248,13 @@ def update_video_detail(
             cur.execute(
                 """
 insert into videos (
-  video_id, h1, title, canonical_url, cover_url, screenshot_url,
+  video_id, h1, title, canonical_url, cover_url, screenshot_url, screenshot_urls,
   m3u8_url, poster_url,
   upload_date, duration_seconds, content_rating, is_family_friendly,
   jsonld, extract, created_at, updated_at, last_crawled_at
 )
 values (
-  %s, %s, %s, %s, %s, %s,
+  %s, %s, %s, %s, %s, %s, %s,
   %s, %s,
   %s, %s, %s, %s,
   %s, %s, now(), now(), now()
@@ -263,6 +265,7 @@ on conflict (video_id) do update set
   canonical_url = coalesce(excluded.canonical_url, videos.canonical_url),
   cover_url = coalesce(excluded.cover_url, videos.cover_url),
   screenshot_url = coalesce(excluded.screenshot_url, videos.screenshot_url),
+  screenshot_urls = coalesce(excluded.screenshot_urls, videos.screenshot_urls),
   m3u8_url = coalesce(excluded.m3u8_url, videos.m3u8_url),
   poster_url = coalesce(excluded.poster_url, videos.poster_url),
   upload_date = coalesce(excluded.upload_date, videos.upload_date),
@@ -281,6 +284,7 @@ on conflict (video_id) do update set
                     canonical_url,
                     cover_url,
                     screenshot_url,
+                    json.dumps(screenshot_urls, ensure_ascii=False) if screenshot_urls else None,
                     m3u8_url,
                     poster_url,
                     upload_date,
@@ -355,6 +359,72 @@ on conflict (video_id) do update set
             )
         conn.commit()
 
+
+def mark_video_download_attempt(db: Db, *, video_id: str) -> None:
+    """
+    记录一次下载尝试（attempts +1，更新时间戳）。
+    """
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+insert into videos (video_id, download_attempts, download_last_attempt_at, created_at, updated_at)
+values (%s, 1, now(), now(), now())
+on conflict (video_id) do update set
+  download_attempts = coalesce(videos.download_attempts, 0) + 1,
+  download_last_attempt_at = now(),
+  updated_at = now()
+                """,
+                (video_id,),
+            )
+        conn.commit()
+
+
+def mark_video_download_done(db: Db, *, video_id: str, downloaded_path: str) -> None:
+    """
+    标记视频已下载完成。
+    """
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+update videos set
+  download_status = 'done',
+  downloaded_path = %s,
+  downloaded_at = now(),
+  download_last_error = null,
+  updated_at = now()
+where video_id = %s
+                """,
+                (downloaded_path, video_id),
+            )
+        conn.commit()
+
+
+def mark_video_download_error(db: Db, *, video_id: str, error: str) -> None:
+    """
+    标记下载失败（保留错误信息，便于后续重试/排查）。
+    """
+
+    err = (error or "").strip()
+    if len(err) > 2000:
+        err = err[:2000]
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+update videos set
+  download_status = 'error',
+  download_last_error = %s,
+  updated_at = now()
+where video_id = %s
+                """,
+                (err, video_id),
+            )
+        conn.commit()
 
 def update_video_series(
     db: Db,

@@ -41,11 +41,20 @@ create table if not exists videos (
   video_magnet_uri text,
   video_torrent_url text,
 
+  -- 下载落盘状态（用于避免重复下载；即使你后续把文件上传网盘并删除本地，也能跳过）。
+  download_status text, -- 'done' | 'error'
+  downloaded_path text,
+  downloaded_at timestamptz,
+  download_attempts integer not null default 0,
+  download_last_attempt_at timestamptz,
+  download_last_error text,
+
   canonical_url text,
   page_url text,
 
   cover_url text,
   screenshot_url text,
+  screenshot_urls jsonb,
 
   -- 可直接用于播放的资源链接（可能包含短期签名参数，建议定期刷新）。
   m3u8_url text,
@@ -71,8 +80,15 @@ alter table videos add column if not exists video_series_source_key text;
 alter table videos add column if not exists video_tags jsonb;
 alter table videos add column if not exists video_magnet_uri text;
 alter table videos add column if not exists video_torrent_url text;
+alter table videos add column if not exists download_status text;
+alter table videos add column if not exists downloaded_path text;
+alter table videos add column if not exists downloaded_at timestamptz;
+alter table videos add column if not exists download_attempts integer not null default 0;
+alter table videos add column if not exists download_last_attempt_at timestamptz;
+alter table videos add column if not exists download_last_error text;
 alter table videos add column if not exists m3u8_url text;
 alter table videos add column if not exists poster_url text;
+alter table videos add column if not exists screenshot_urls jsonb;
 
 create table if not exists video_taxonomy (
   video_id text not null references videos(video_id) on delete cascade,

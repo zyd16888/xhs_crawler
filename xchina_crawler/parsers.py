@@ -475,6 +475,7 @@ class VideoPageParsed:
     canonical_url: str | None
     cover_url: str | None
     screenshot_url: str | None
+    screenshot_urls: list[str]
     m3u8_url: str | None
     poster_url: str | None
     upload_date: datetime | None
@@ -599,9 +600,20 @@ def _parse_video_page_bs4(html: str) -> VideoPageParsed:
         cover_url = str(og.get("content")).strip() or None
 
     screenshot_url = None
-    img = soup.find("img", src=re.compile(r"/screenshot/", re.I))
-    if img and img.get("src"):
-        screenshot_url = str(img.get("src")).strip() or None
+    screenshot_urls: list[str] = []
+    seen_ss: set[str] = set()
+    for img in soup.find_all("img", src=re.compile(r"/screenshot/", re.I)):
+        if not img.get("src"):
+            continue
+        u = str(img.get("src")).strip()
+        if not u:
+            continue
+        if u in seen_ss:
+            continue
+        seen_ss.add(u)
+        screenshot_urls.append(u)
+    if screenshot_urls:
+        screenshot_url = screenshot_urls[0]
 
     m3u8_url = _extract_first_m3u8_url(html)
     poster_url = _extract_first_poster_url(html)
@@ -680,6 +692,7 @@ def _parse_video_page_bs4(html: str) -> VideoPageParsed:
         canonical_url=canonical_url,
         cover_url=cover_url,
         screenshot_url=screenshot_url,
+        screenshot_urls=screenshot_urls,
         m3u8_url=m3u8_url,
         poster_url=poster_url or cover_url,
         upload_date=upload_date,

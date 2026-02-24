@@ -28,6 +28,7 @@ HTML 解析使用 `BeautifulSoup (bs4)`。
 - `base_urls`：HTML 页面抓取的域名列表（按顺序 failover）
 - `http.*`：UA/Referer/超时/重试/限速等
 - `crawl.*`：抓取策略默认值（用配置尽量减少命令行参数）
+- `download.*`：下载器默认参数（输出目录、是否移动到 complete 等）
 
 ## 安装依赖
 
@@ -83,4 +84,51 @@ python3 -m xchina_crawler --config config.yaml crawl-board --series-id 63824a975
 
 ```bash
 python3 -m xchina_crawler --config config.yaml crawl-series --series-id 5f904550b8fcc --max-pages 2 --with-detail
+```
+
+## 下载到 Emby（电影库）
+
+该工具会从数据库 `videos` 表读取待下载记录，按 Emby/Kodi 电影库结构落盘，并生成 `movie.nfo`：
+
+- 默认会先刷新 `/video` 页面以获取最新 `m3u8_url/cover_url/screenshot_url`（避免过期），并回写数据库。
+- 下载完成后会在数据库标记 `downloaded_at/download_status/downloaded_path`，用于避免重复下载（即使你后续把文件上传网盘并删除本地）。
+- 默认会先下载到 `--out/_working/...`，完成后整体移动到 `--out/complete/...`（避免 Emby 扫到半成品）。
+- 视频文件名优先使用 `videos.h1`（更易读）；Windows 下会自动截断以降低路径过长风险。
+- NFO 文件名与视频同名（例如 `xxx.mp4` 对应 `xxx.nfo`）。
+- screenshot 会写到 `extrafanart/fanart1.*`；不在影片目录下写 `fanart.*`/`thumb.*`。
+- 可在 `download.workers` 开启多线程并发下载（按视频维度）；进度输出由 `download.show_progress` 控制。
+- 进度输出优先使用数据库/JSON-LD 的 `duration_seconds`；若缺失，会尝试从 m3u8 清单的 `#EXTINF` 估算总时长来显示百分比。
+- NFO 的 `<plot>` 仅使用 JSON-LD 的 `description`（不再回退写入 URL）。
+- 进度里 `net=...MiB/s` 为脚本按输出字节增量估算的吞吐（更接近“网速”）；不再使用 ffmpeg 的 `speed=3.2x`（那是相对实时播放倍速）。
+- `download.engine` 可选 `ffmpeg` 或 `aria2`；`aria2` 会按单视频分片并发（`download.concurrent_segments`，默认 16）下载后再本地合并。
+- `download.max_missing_segments` 允许 aria2 模式缺失少量 ts 分片并继续合并（会造成画面/音频跳跃，默认 0）。
+
+示例：
+
+```bash
+python3 -m xchina_crawler.emby_downloader --config config.yaml --out "/path/to/MediaRoot" --limit 50
+```
+
+指定单个视频：
+
+```bash
+python3 -m xchina_crawler.emby_downloader --config config.yaml --out "/path/to/MediaRoot" --video-id 699ae9ca4d1d8
+```
+
+强制重下（忽略 DB 标记/已有文件）：
+
+```bash
+python3 -m xchina_crawler.emby_downloader --config config.yaml --out "/path/to/MediaRoot" --video-id 699ae9ca4d1d8 --force
+```
+
+不移动到 complete（直接落在 `--out` 下）：
+
+```bash
+python3 -m xchina_crawler.emby_downloader --config config.yaml --out "/path/to/MediaRoot" --video-id 699ae9ca4d1d8 --no-move
+```
+
+也可以把 `download.out_dir / download.limit / download.move_to_complete` 等写到 `config.yaml`，这样日常跑的时候只需要：
+
+```bash
+python3 -m xchina_crawler.emby_downloader --config config.yaml
 ```

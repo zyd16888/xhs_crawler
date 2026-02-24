@@ -32,3 +32,45 @@ crawl:
 
   # 并发线程数（用于详情/下载页抓取）
   workers: 4
+
+
+# 下载器（Emby 电影库）配置
+download:
+  # 输出根目录（可选；也可用命令行 --out 覆盖）
+  # out_dir: "/path/to/MediaRoot"
+
+  # 每次运行最多处理多少条
+  limit: 50
+
+  # 下载前是否刷新 /video（更新 m3u8/图片；m3u8 常过期，建议 true）
+  refresh_video_page: true
+
+  # 完成后是否从 _working 移动到 complete（建议 true，避免媒体库扫到半成品）
+  move_to_complete: true
+  work_subdir: "_working"
+  complete_subdir: "complete"
+
+  # 是否也处理已标记 downloaded 的记录（默认 false）
+  include_downloaded: false
+
+  # 下载并发数（按视频维度；ffmpeg 会占用较多 I/O/CPU，建议 2~4 试起）
+  workers: 1
+
+  # 下载引擎：
+  # - ffmpeg：ffmpeg 直接拉 m3u8（默认）
+  # - aria2：aria2c 并发下载分片，再用 ffmpeg 本地合并（单视频分片并发）
+  engine: "ffmpeg"
+  concurrent_segments: 16
+  aria2c_path: "aria2c"
+  # aria2 模式允许缺失的 ts 分片数量（缺片会导致画面/音频短暂跳跃；默认 0）
+  max_missing_segments: 0
+
+  # 是否显示下载进度
+  show_progress: true
+  progress_interval_seconds: 2.0
+
+  # 是否动态刷新进度（同一屏多行刷新；非 TTY 自动降级）
+  dynamic_progress: true
+
+  # 进度显示的名称最大长度（避免太长刷屏）
+  name_max: 28

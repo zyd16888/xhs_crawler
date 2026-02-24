@@ -428,6 +428,8 @@ def _crawl_series_pages(
                         redactions=san.redactions,
                     )
 
+                ss_url = urljoin(detail_url, vparsed.screenshot_url) if vparsed.screenshot_url else None
+                ss_urls = [urljoin(detail_url, u) for u in (vparsed.screenshot_urls or [])]
                 update_video_detail(
                     db,
                     video_id=vparsed.video_id,
@@ -435,7 +437,8 @@ def _crawl_series_pages(
                     title=vparsed.title,
                     canonical_url=vparsed.canonical_url,
                     cover_url=vparsed.cover_url,
-                    screenshot_url=vparsed.screenshot_url,
+                    screenshot_url=ss_url,
+                    screenshot_urls=ss_urls,
                     m3u8_url=vparsed.m3u8_url,
                     poster_url=vparsed.poster_url,
                     upload_date=vparsed.upload_date,

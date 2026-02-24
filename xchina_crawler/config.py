@@ -37,6 +37,22 @@ class Config:
         crawl_use_raw_cache: crawl-* 默认是否优先复用 raw_pages（URL 命中则不再发请求）
         crawl_raw_cache_max_age_seconds: raw cache 最大复用秒数（<=0 不限制）
         crawl_all_pages: crawl-* 默认是否一直翻页直到 last_page
+        download_out_dir: Emby 下载输出根目录（可为空；也可用命令行 --out 覆盖）
+        download_limit: 每次运行最多处理多少条
+        download_refresh_video_page: 下载前是否刷新 /video 页面（更新 m3u8/图片等）
+        download_move_to_complete: 完成后是否移动到 complete 目录
+        download_work_subdir: 工作目录子目录名（默认：_working）
+        download_complete_subdir: 完成目录子目录名（默认：complete）
+        download_include_downloaded: 是否也处理已标记 downloaded 的记录（默认：false）
+        download_workers: 下载并发数（按视频维度；默认 1）
+        download_show_progress: 是否显示下载进度（默认 true）
+        download_progress_interval_seconds: 进度输出最小间隔秒（默认 2.0）
+        download_dynamic_progress: 是否用同一屏动态刷新进度（默认 true；非 TTY 自动降级为普通输出）
+        download_name_max: 进度显示名称最大长度（默认 28）
+        download_engine: 下载引擎（'ffmpeg' | 'aria2'；默认 'ffmpeg'）
+        download_concurrent_segments: aria2 单视频分片并发数（默认 16）
+        download_aria2c_path: aria2c 可执行文件名或路径（默认 'aria2c'）
+        download_max_missing_segments: aria2 模式允许缺失的 ts 分片数量（默认 0）
     """
 
     database_url: str
@@ -54,6 +70,22 @@ class Config:
     crawl_use_raw_cache: bool
     crawl_raw_cache_max_age_seconds: int
     crawl_all_pages: bool
+    download_out_dir: str | None
+    download_limit: int
+    download_refresh_video_page: bool
+    download_move_to_complete: bool
+    download_work_subdir: str
+    download_complete_subdir: str
+    download_include_downloaded: bool
+    download_workers: int
+    download_show_progress: bool
+    download_progress_interval_seconds: float
+    download_dynamic_progress: bool
+    download_name_max: int
+    download_engine: str
+    download_concurrent_segments: int
+    download_aria2c_path: str
+    download_max_missing_segments: int
 
 
 def _require_str(obj: dict[str, Any], key: str) -> str:
@@ -205,6 +237,10 @@ def load_config(path: str) -> Config:
     if not isinstance(crawl, dict):
         raise RuntimeError("配置项类型错误：crawl 需要 map/object")
 
+    download = data.get("download") or {}
+    if not isinstance(download, dict):
+        raise RuntimeError("配置项类型错误：download 需要 map/object")
+
     user_agent = _optional_str(
         http,
         "user_agent",
@@ -215,6 +251,15 @@ def load_config(path: str) -> Config:
     # backwards compatibility: allow workers under http.*, but prefer crawl.workers
     http_workers = max(1, _optional_int(http, "workers", 1))
     crawl_workers = max(1, _optional_int(crawl, "workers", http_workers))
+
+    download_out_dir_raw = download.get("out_dir")
+    download_out_dir: str | None
+    if download_out_dir_raw is None:
+        download_out_dir = None
+    elif not isinstance(download_out_dir_raw, str):
+        raise RuntimeError("配置项类型错误：download.out_dir 需要 string")
+    else:
+        download_out_dir = download_out_dir_raw.strip() or None
 
     return Config(
         database_url=database_url,
@@ -232,4 +277,20 @@ def load_config(path: str) -> Config:
         crawl_use_raw_cache=_optional_bool(crawl, "use_raw_cache", False),
         crawl_raw_cache_max_age_seconds=_optional_int(crawl, "raw_cache_max_age_seconds", 0),
         crawl_all_pages=_optional_bool(crawl, "all_pages", False),
+        download_out_dir=download_out_dir,
+        download_limit=max(1, _optional_int(download, "limit", 50)),
+        download_refresh_video_page=_optional_bool(download, "refresh_video_page", True),
+        download_move_to_complete=_optional_bool(download, "move_to_complete", True),
+        download_work_subdir=_optional_str(download, "work_subdir", "_working"),
+        download_complete_subdir=_optional_str(download, "complete_subdir", "complete"),
+        download_include_downloaded=_optional_bool(download, "include_downloaded", False),
+        download_workers=max(1, _optional_int(download, "workers", 1)),
+        download_show_progress=_optional_bool(download, "show_progress", True),
+        download_progress_interval_seconds=_optional_float(download, "progress_interval_seconds", 2.0),
+        download_dynamic_progress=_optional_bool(download, "dynamic_progress", True),
+        download_name_max=max(8, _optional_int(download, "name_max", 28)),
+        download_engine=_optional_str(download, "engine", "ffmpeg").lower(),
+        download_concurrent_segments=max(1, _optional_int(download, "concurrent_segments", 16)),
+        download_aria2c_path=_optional_str(download, "aria2c_path", "aria2c"),
+        download_max_missing_segments=max(0, _optional_int(download, "max_missing_segments", 0)),
     )
