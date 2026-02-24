@@ -45,7 +45,7 @@ class Db:
         """
 
         if psycopg is None:
-            raise RuntimeError("psycopg is not installed. Install requirements.txt first.")
+            raise RuntimeError("未安装 psycopg。请先安装 requirements.txt 依赖。")
         return psycopg.connect(self.dsn)
 
 

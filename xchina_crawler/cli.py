@@ -95,14 +95,14 @@ def _fetch_path_logged(client: HttpClient, *, path: str, what: str, key: str | N
         (final_url, html_text)
     """
 
-    msg = f"fetch start what={what} path={path}"
+    msg = f"开始抓取 what={what} path={path}"
     if key:
         msg += f" key={key}"
     LOG.info(msg)
     t0 = time.perf_counter()
     res = client.fetch_path(path)
     dt_ms = int((time.perf_counter() - t0) * 1000)
-    LOG.info(f"fetch done what={what} status={res.status_code} ms={dt_ms} url={res.url}")
+    LOG.info(f"抓取完成 what={what} status={res.status_code} ms={dt_ms} url={res.url}")
     return res.url, res.text
 
 
@@ -141,7 +141,7 @@ def _maybe_load_cached_html(
             if age > max_age_seconds:
                 continue
 
-        LOG.info(f"raw cache hit kind={page_kind} url={url}")
+        LOG.info(f"原始页缓存命中 kind={page_kind} url={url}")
         return url, html_sanitized
     return None
 
@@ -176,7 +176,7 @@ def cmd_init_db(args: argparse.Namespace) -> int:
 
     cfg = load_config(args.config)
     init_db(Db(cfg.database_url), schema_path=args.schema)
-    print("db initialized")
+    print("数据库已初始化")
     return 0
 
 
@@ -219,7 +219,7 @@ def cmd_discover_series(args: argparse.Namespace) -> int:
         parent_id=None,
         item_count_hint=None,
     )
-    print(f"parent: {args.series_id} -> node_id={parent_id} name={parent_name}")
+    print(f"父级: {args.series_id} -> node_id={parent_id} name={parent_name}")
 
     for child in parsed.children:
         child_abs_url = None
@@ -238,9 +238,9 @@ def cmd_discover_series(args: argparse.Namespace) -> int:
             parent_id=parent_id,
             item_count_hint=child.item_count_hint,
         )
-        print(f" child: {child.series_id} -> node_id={child_id} name={child.name} count={child.item_count_hint}")
+        print(f"子级: {child.series_id} -> node_id={child_id} name={child.name} count={child.item_count_hint}")
 
-    print(f"children: {len(parsed.children)}")
+    print(f"子级数量: {len(parsed.children)}")
     return 0
 
 
@@ -285,7 +285,7 @@ def _crawl_series_pages(
             break
 
         path = f"/videos/series-{series_id}/{current}.html"
-        LOG.info(f"page start series_id={series_id} page={current} path={path}")
+        LOG.info(f"分页开始 series_id={series_id} page={current} path={path}")
 
         cached = None
         if store_raw and use_raw_cache:
@@ -304,7 +304,7 @@ def _crawl_series_pages(
 
         parsed = parse_series_page(path, html)
         LOG.info(
-            f"page parsed series_id={series_id} page={current} videos={len(parsed.video_cards)} last_page={parsed.last_page_number}"
+            f"分页解析 series_id={series_id} page={current} videos={len(parsed.video_cards)} last_page={parsed.last_page_number}"
         )
 
         if store_raw:
@@ -576,13 +576,13 @@ def _crawl_series_pages(
                     try:
                         fut.result()
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[warn] card processing failed: {exc}")
+                        print(f"[警告] 卡片处理失败：{exc}")
         finally:
             if executor:
                 executor.shutdown(wait=True)
 
         pages_done += 1
-        LOG.info(f"page done series_id={series_id} page={current} videos={len(parsed.video_cards)}")
+        LOG.info(f"分页完成 series_id={series_id} page={current} videos={len(parsed.video_cards)}")
 
         if parsed.last_page_number is not None and current >= parsed.last_page_number:
             break
@@ -703,7 +703,7 @@ def cmd_crawl_board(args: argparse.Namespace) -> int:
 
     # upsert children, then crawl
     children = board_parsed.children
-    print(f"board: {args.series_id} name={board_name} children={len(children)}")
+    print(f"板块: {args.series_id} name={board_name} children={len(children)}")
 
     if args.board_max_pages is None or args.board_max_pages > 0:
         _crawl_series_pages(

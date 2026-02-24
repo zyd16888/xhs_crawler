@@ -113,7 +113,7 @@ class HttpClient:
                     time.sleep(min(2.0, self._sleep_seconds * attempt))
                     continue
 
-        raise RuntimeError(f"fetch failed: {last_url}") from last_exc
+        raise RuntimeError(f"抓取失败：{last_url}") from last_exc
 
     def candidate_urls(self, path: str) -> list[str]:
         """

@@ -364,7 +364,7 @@ def _load_media_playlist(
     if "#EXT-X-STREAM-INF" in text and "#EXTINF" not in text:
         best = _select_best_variant_from_master(text)
         if not best:
-            raise RuntimeError("m3u8 master playlist has no variants")
+            raise RuntimeError("m3u8 主播放列表未包含可用清晰度（variants）")
         url2 = urljoin(url, best)
         text2 = _fetch_text(url2, headers=headers, timeout_seconds=timeout_seconds)
         return _parse_media_playlist(url2, text2)
@@ -409,7 +409,7 @@ def _write_local_m3u8(
             continue
         # segment uri
         if seg_idx >= len(segments):
-            raise RuntimeError("segment count mismatch when rewriting m3u8")
+            raise RuntimeError("重写 m3u8 时分片数量不一致")
         present = True
         if seg_idx < len(segment_present):
             present = bool(segment_present[seg_idx])
@@ -420,7 +420,7 @@ def _write_local_m3u8(
         seg_idx += 1
 
     if seg_idx != len(segments):
-        raise RuntimeError("segment count mismatch when rewriting m3u8")
+        raise RuntimeError("重写 m3u8 时分片数量不一致")
     out_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
 
 
@@ -442,7 +442,7 @@ def _run_aria2(
     log_path: Path,
 ) -> None:
     if shutil.which(aria2c_path) is None:
-        raise RuntimeError(f"aria2c not found: {aria2c_path!r}")
+        raise RuntimeError(f"未找到 aria2c：{aria2c_path!r}")
 
     dir_path.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -547,12 +547,12 @@ def _run_aria2(
                 pct = min(99.9, (done_dur / float(total_duration_seconds)) * 100.0)
                 renderer.update(
                     renderer_key,
-                    f"[{display_name}] {pct:5.1f}% {done:4d}/{seg_total} seg {_format_hhmmss(done_dur)}/{_format_hhmmss(total_duration_seconds)} net={net:4.1f}MiB/s",
+                    f"[{display_name}] {pct:5.1f}% {done:4d}/{seg_total} 分片 {_format_hhmmss(done_dur)}/{_format_hhmmss(total_duration_seconds)} 网速={net:4.1f}MiB/s",
                 )
             else:
                 renderer.update(
                     renderer_key,
-                    f"[{display_name}] {done:4d}/{seg_total} seg {_format_hhmmss(done_dur)} net={net:4.1f}MiB/s",
+                    f"[{display_name}] {done:4d}/{seg_total} 分片 {_format_hhmmss(done_dur)} 网速={net:4.1f}MiB/s",
                 )
 
         if rc is not None:
@@ -570,7 +570,7 @@ def _run_aria2(
         except Exception:
             log_tail = ""
         extra = f"\n--- aria2.log tail ---\n{log_tail}" if log_tail else ""
-        raise RuntimeError(f"aria2c failed (rc={rc}). last_output:\n{tail_s}{extra}")
+        raise RuntimeError(f"aria2c 失败（rc={rc}）。最近输出：\n{tail_s}{extra}")
 
 
 def _download_m3u8_with_aria2(
@@ -655,7 +655,7 @@ def _download_m3u8_with_aria2(
     for name in required:
         p = segments_dir / name
         if not p.exists() or p.stat().st_size <= 0:
-            raise RuntimeError(f"required file missing: {name}") from aria2_error
+            raise RuntimeError(f"缺少必需文件：{name}") from aria2_error
 
     # 统计缺失分片（缺片会导致画面/音频跳跃；可配置容错上限）
     missing_ts: list[str] = []
@@ -679,13 +679,13 @@ def _download_m3u8_with_aria2(
         if len(missing_ts) > int(max_missing_segments):
             sample = ", ".join(missing_ts[:12])
             raise RuntimeError(
-                f"missing ts segments: {len(missing_ts)} > max_missing_segments={max_missing_segments}; sample={sample}"
+                f"缺失 ts 分片：{len(missing_ts)} > max_missing_segments={max_missing_segments}；sample={sample}"
             ) from aria2_error
-        renderer.log(f"[warn] missing ts segments allowed: {len(missing_ts)} (max={max_missing_segments})")
+        renderer.log(f"[警告] 允许缺失 ts 分片：{len(missing_ts)}（max={max_missing_segments}）")
 
     # aria2 即便所有文件都下载完成，也可能因为个别请求报错导致 rc!=0；这种情况按“文件齐全”继续。
     if aria2_error is not None:
-        renderer.log(f"[warn] aria2 exited with error; continue. err={aria2_error}")
+        renderer.log(f"[警告] aria2 退出时有错误，但文件齐全，继续。err={aria2_error}")
 
     # 额外校验：AES-128 key 通常为 16 bytes；若明显不对，给出更清晰的错误。
     if playlist.key_url:
@@ -693,14 +693,14 @@ def _download_m3u8_with_aria2(
         try:
             key_size = key_p.stat().st_size
         except FileNotFoundError as exc:
-            raise RuntimeError("missing key.bin") from exc
+            raise RuntimeError("缺少 key.bin") from exc
         if key_size != 16:
             sample = b""
             try:
                 sample = key_p.open("rb").read(64)
             except Exception:
                 sample = b""
-            raise RuntimeError(f"invalid key.bin size={key_size} sample={sample[:32]!r}")
+            raise RuntimeError(f"key.bin 大小异常：size={key_size} sample={sample[:32]!r}")
 
     # 生成本地 m3u8（供 ffmpeg 合并/解密）
     local_m3u8 = segments_dir / "local.m3u8"
@@ -850,16 +850,16 @@ def _ffmpeg_download_m3u8(
             msg = (
                 f"[{progress_prefix}] {pct:5.1f}% "
                 f"{_format_hhmmss(out_sec)}/{_format_hhmmss(duration_seconds)} "
-                f"{size_mb:8.1f}MB net={net_s}"
+                f"{size_mb:8.1f}MB 网速={net_s}"
             )
         else:
-            msg = f"[{progress_prefix}] {_format_hhmmss(out_sec)} {size_mb:8.1f}MB net={net_s}"
+            msg = f"[{progress_prefix}] {_format_hhmmss(out_sec)} {size_mb:8.1f}MB 网速={net_s}"
         on_progress(msg)
 
     rc = proc.wait()
     if rc != 0:
         tail_s = "\n".join([x for x in tail if x][-20:])
-        raise RuntimeError(f"ffmpeg failed (rc={rc}). last_output:\n{tail_s}")
+        raise RuntimeError(f"ffmpeg 失败（rc={rc}）。最近输出：\n{tail_s}")
 
     tmp_path.replace(out_path)
 
@@ -1391,7 +1391,7 @@ def run(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not found in PATH")
+        raise RuntimeError("PATH 中未找到 ffmpeg")
 
     cfg = load_config(args.config)
     db = Db(cfg.database_url)
@@ -1406,7 +1406,7 @@ def run(argv: list[str] | None = None) -> int:
 
     out_dir = (args.out or cfg.download_out_dir or "").strip()
     if not out_dir:
-        raise RuntimeError("missing output dir: use --out or set download.out_dir in config.yaml")
+        raise RuntimeError("缺少输出目录：请使用 --out 或在 config.yaml 中设置 download.out_dir")
 
     limit = int(args.limit) if args.limit is not None else int(cfg.download_limit)
     refresh_video_page = (not bool(args.no_refresh)) if args.no_refresh is not None else bool(cfg.download_refresh_video_page)
@@ -1428,7 +1428,7 @@ def run(argv: list[str] | None = None) -> int:
     name_max = int(cfg.download_name_max)
     engine = (args.engine or cfg.download_engine or "ffmpeg").strip().lower()
     if engine not in {"ffmpeg", "aria2"}:
-        raise RuntimeError(f"invalid download.engine: {engine!r} (expected 'ffmpeg' or 'aria2')")
+        raise RuntimeError(f"无效的 download.engine：{engine!r}（应为 'ffmpeg' 或 'aria2'）")
     concurrent_segments = (
         max(1, int(args.concurrent_segments))
         if args.concurrent_segments is not None
@@ -1462,7 +1462,7 @@ def run(argv: list[str] | None = None) -> int:
     )
 
     if not videos:
-        print("no videos matched")
+        print("没有匹配到任何视频")
         return 0
 
     renderer = ProgressRenderer(dynamic=bool(dynamic_progress))
@@ -1564,7 +1564,7 @@ def run(argv: list[str] | None = None) -> int:
             # download video
             m3u8 = (vparsed.m3u8_url if vparsed and vparsed.m3u8_url else None) or v.m3u8_url
             if not m3u8:
-                raise RuntimeError("missing m3u8_url (refresh failed or page has no m3u8)")
+                raise RuntimeError("缺少 m3u8_url（刷新失败或页面没有 m3u8）")
 
             duration_sec = None
             if vparsed and vparsed.duration_seconds:
@@ -1668,17 +1668,17 @@ def run(argv: list[str] | None = None) -> int:
                     if args.force:
                         shutil.rmtree(final_movie_dir)
                     else:
-                        raise RuntimeError(f"final dir exists: {final_movie_dir}")
+                        raise RuntimeError(f"目标目录已存在：{final_movie_dir}")
                 final_movie_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(movie_dir), str(final_movie_dir))
                 final_path = final_video_path
 
             mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(final_path))
-            renderer.update(v.video_id, f"[{_shorten(title, max_len=name_max)}] done -> {final_path}")
+            renderer.update(v.video_id, f"[{_shorten(title, max_len=name_max)}] 完成 -> {final_path}")
 
         except Exception as exc:  # noqa: BLE001
             mark_video_download_error(db, video_id=v.video_id, error=str(exc))
-            renderer.update(v.video_id, f"[{_shorten(v.title or v.h1 or v.video_id, max_len=name_max)}] error: {exc}")
+            renderer.update(v.video_id, f"[{_shorten(v.title or v.h1 or v.video_id, max_len=name_max)}] 错误：{exc}")
 
     if workers <= 1:
         for v in videos:
@@ -1695,7 +1695,7 @@ def run(argv: list[str] | None = None) -> int:
             try:
                 fut.result()
             except Exception as exc:  # noqa: BLE001
-                log(f"[warn] worker failed: {exc}")
+                log(f"[警告] 工作线程失败：{exc}")
     return 0
 
 
