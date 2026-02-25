@@ -59,6 +59,14 @@ python3 -m xchina_crawler --config config.yaml --log-level DEBUG crawl-series --
 python3 -m xchina_crawler --config config.yaml crawl-board --series-id 63824a975d8ae --board-max-pages 1 --child-max-pages 2 --with-detail --with-download --store-raw
 ```
 
+断点续跑：只想从板块列表第 N 页开始抓（仍会先抓第 1 页用于发现子分类），可用 `--board-start-page`：
+
+```bash
+python3 -m xchina_crawler --config config.yaml crawl-board --series-id 63824a975d8ae --board-start-page 10 --board-max-pages 2
+```
+
+也可以写到配置里（`config.yaml` 的 `crawl.board_start_page`），日常就不用每次传参数。
+
 如果希望一直翻页直到板块/子分类全部抓完（直到解析到的 `last_page`），加 `--all-pages`：
 
 ```bash

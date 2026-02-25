@@ -38,6 +38,9 @@ crawl:
   # 一直翻页直到 last_page
   all_pages: false
 
+  # crawl-board 板块自身列表起始页（断点续跑用；仍会先抓第 1 页用于发现子分类）
+  board_start_page: 1
+
   # 并发线程数（用于详情/下载页抓取）
   workers: 4
 

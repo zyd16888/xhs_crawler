@@ -691,6 +691,10 @@ def cmd_crawl_board(args: argparse.Namespace) -> int:
         args.child_end_page = None
         args.child_max_pages = None
 
+    board_start_page = int(args.board_start_page) if args.board_start_page is not None else int(cfg.crawl_board_start_page)
+    if board_start_page < 1:
+        raise RuntimeError("--board-start-page 必须 >= 1")
+
     board_first_path = f"/videos/series-{args.series_id}/1.html"
     board_res = client.fetch_path(board_first_path)
     board_parsed = parse_series_page(board_first_path, board_res.text)
@@ -722,7 +726,7 @@ def cmd_crawl_board(args: argparse.Namespace) -> int:
             client=client,
             series_id=args.series_id,
             node_id=board_node_id,
-            start_page=1,
+            start_page=board_start_page,
             end_page=args.board_end_page,
             max_pages=args.board_max_pages,
             crawl_video_detail=bool(with_detail),
@@ -832,6 +836,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_crawl_board = sub.add_parser("crawl-board", help="discover child series then crawl each child series")
     p_crawl_board.add_argument("--series-id", required=True)
+    p_crawl_board.add_argument("--board-start-page", type=int, help="板块自身列表起始页（默认取配置 crawl.board_start_page）")
     p_crawl_board.add_argument("--board-end-page", type=int)
     p_crawl_board.add_argument("--board-max-pages", type=int, default=1)
     p_crawl_board.add_argument("--child-end-page", type=int)

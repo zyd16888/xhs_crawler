@@ -41,6 +41,7 @@ class Config:
         crawl_use_raw_cache: crawl-* 默认是否优先复用 raw_pages（URL 命中则不再发请求）
         crawl_raw_cache_max_age_seconds: raw cache 最大复用秒数（<=0 不限制）
         crawl_all_pages: crawl-* 默认是否一直翻页直到 last_page
+        crawl_board_start_page: crawl-board 板块自身列表起始页（默认 1）
         download_out_dir: Emby 下载输出根目录（可为空；也可用命令行 --out 覆盖）
         download_limit: 每次运行最多处理多少条
         download_refresh_video_page: 下载前是否刷新 /video 页面（更新 m3u8/图片等）
@@ -78,6 +79,7 @@ class Config:
     crawl_use_raw_cache: bool
     crawl_raw_cache_max_age_seconds: int
     crawl_all_pages: bool
+    crawl_board_start_page: int
     download_out_dir: str | None
     download_limit: int
     download_refresh_video_page: bool
@@ -317,6 +319,7 @@ def load_config(path: str) -> Config:
         crawl_use_raw_cache=_optional_bool(crawl, "use_raw_cache", False),
         crawl_raw_cache_max_age_seconds=_optional_int(crawl, "raw_cache_max_age_seconds", 0),
         crawl_all_pages=_optional_bool(crawl, "all_pages", False),
+        crawl_board_start_page=max(1, _optional_int(crawl, "board_start_page", 1)),
         download_out_dir=download_out_dir,
         download_limit=max(1, _optional_int(download, "limit", 50)),
         download_refresh_video_page=_optional_bool(download, "refresh_video_page", True),
