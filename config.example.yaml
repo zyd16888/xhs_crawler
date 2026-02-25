@@ -13,6 +13,14 @@ logging:
 http:
   user_agent: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Mobile Safari/537.36"
   referer: "https://xchina.co/"
+  # 代理（可选）：
+  # - 推荐 socks5h（DNS 也走代理）
+  proxy_url: "socks5h://127.0.0.1:7890"
+  # 也可以分别指定 http/https（优先级高于 proxy_url）：
+  # proxy_http: "socks5h://127.0.0.1:7890"
+  # proxy_https: "socks5h://127.0.0.1:7890"
+  # 是否允许 requests 读取环境变量代理（HTTP_PROXY/HTTPS_PROXY 等；默认 false 更可控）
+  trust_env: false
   timeout_seconds: 30
   retries: 3
   sleep_seconds: 0.3

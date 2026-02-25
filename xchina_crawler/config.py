@@ -26,6 +26,10 @@ class Config:
         base_urls: 抓取 HTML 的域名列表（会按顺序尝试，失败自动切换）
         user_agent: HTTP User-Agent
         referer: HTTP Referer
+        proxy_url: 代理 URL（可选；同时作用于 http/https；例如 socks5h://127.0.0.1:7890）
+        proxy_http: HTTP 代理 URL（可选；优先级高于 proxy_url）
+        proxy_https: HTTPS 代理 URL（可选；优先级高于 proxy_url）
+        trust_env: requests 是否读取环境变量代理（HTTP_PROXY/HTTPS_PROXY 等；默认 false）
         timeout_seconds: 单次请求超时时间（秒）
         retries: 单个 URL 的重试次数
         sleep_seconds: 每次请求后的固定 sleep（秒），用于降速/减少触发风控
@@ -59,6 +63,10 @@ class Config:
     base_urls: list[str]
     user_agent: str
     referer: str
+    proxy_url: str | None
+    proxy_http: str | None
+    proxy_https: str | None
+    trust_env: bool
     timeout_seconds: int
     retries: int
     sleep_seconds: float
@@ -131,6 +139,30 @@ def _optional_str(obj: dict[str, Any], key: str, default: str) -> str:
     if not isinstance(v, str):
         raise RuntimeError(f"配置项类型错误：{key} 需要 string")
     return v.strip() or default
+
+
+def _optional_str_or_none(obj: dict[str, Any], key: str) -> str | None:
+    """
+    从 dict 中读取可选字符串配置项（允许空字符串 -> None）。
+
+    Args:
+        obj: YAML 对象（dict）
+        key: 字段名
+
+    Returns:
+        str | None
+
+    Raises:
+        RuntimeError: 字段类型错误
+    """
+
+    v = obj.get(key)
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise RuntimeError(f"配置项类型错误：{key} 需要 string")
+    vv = v.strip()
+    return vv or None
 
 
 def _optional_int(obj: dict[str, Any], key: str, default: int) -> int:
@@ -247,6 +279,10 @@ def load_config(path: str) -> Config:
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Mobile Safari/537.36",
     )
     referer = _optional_str(http, "referer", base_urls[0] + "/")
+    proxy_url = _optional_str_or_none(http, "proxy_url")
+    proxy_http = _optional_str_or_none(http, "proxy_http")
+    proxy_https = _optional_str_or_none(http, "proxy_https")
+    trust_env = _optional_bool(http, "trust_env", False)
 
     # backwards compatibility: allow workers under http.*, but prefer crawl.workers
     http_workers = max(1, _optional_int(http, "workers", 1))
@@ -266,6 +302,10 @@ def load_config(path: str) -> Config:
         base_urls=base_urls,
         user_agent=user_agent,
         referer=referer,
+        proxy_url=proxy_url,
+        proxy_http=proxy_http,
+        proxy_https=proxy_https,
+        trust_env=bool(trust_env),
         timeout_seconds=_optional_int(http, "timeout_seconds", 30),
         retries=_optional_int(http, "retries", 3),
         sleep_seconds=_optional_float(http, "sleep_seconds", 0.3),

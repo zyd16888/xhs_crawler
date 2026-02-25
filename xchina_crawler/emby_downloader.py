@@ -1395,10 +1395,21 @@ def run(argv: list[str] | None = None) -> int:
 
     cfg = load_config(args.config)
     db = Db(cfg.database_url)
+    proxies: dict[str, str] = {}
+    if getattr(cfg, "proxy_http", None):
+        proxies["http"] = str(cfg.proxy_http)
+    if getattr(cfg, "proxy_https", None):
+        proxies["https"] = str(cfg.proxy_https)
+    if (not proxies) and getattr(cfg, "proxy_url", None):
+        proxies["http"] = str(cfg.proxy_url)
+        proxies["https"] = str(cfg.proxy_url)
+
     client = HttpClient(
         cfg.base_urls,
         user_agent=cfg.user_agent,
         referer=cfg.referer,
+        proxies=(proxies or None),
+        trust_env=bool(getattr(cfg, "trust_env", False)),
         timeout_seconds=cfg.timeout_seconds,
         retries=cfg.retries,
         sleep_seconds=cfg.sleep_seconds,

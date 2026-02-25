@@ -49,6 +49,8 @@ class HttpClient:
         *,
         user_agent: str,
         referer: str,
+        proxies: dict[str, str] | None = None,
+        trust_env: bool = False,
         timeout_seconds: int,
         retries: int,
         sleep_seconds: float,
@@ -57,6 +59,8 @@ class HttpClient:
         self._timeout_seconds = timeout_seconds
         self._retries = retries
         self._sleep_seconds = sleep_seconds
+        self._proxies = dict(proxies) if proxies else None
+        self._trust_env = bool(trust_env)
         self._headers = {
             "User-Agent": user_agent,
             "Referer": referer,
@@ -78,6 +82,9 @@ class HttpClient:
         if sess is None:
             sess = requests.Session()
             sess.headers.update(self._headers)
+            sess.trust_env = self._trust_env
+            if self._proxies:
+                sess.proxies.update(self._proxies)
             self._tls.session = sess
         return sess
 

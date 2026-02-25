@@ -23,6 +23,7 @@ HTML 解析使用 `BeautifulSoup (bs4)`。
 - `database_url`：Postgres DSN
 - `base_urls`：HTML 页面抓取的域名列表（按顺序 failover）
 - `http.*`：UA/Referer/超时/重试/限速等
+- `http.proxy_*`：可选代理（支持 socks5/socks5h；建议 socks5h）
 - `crawl.*`：抓取策略默认值（用配置尽量减少命令行参数）
 - `download.*`：下载器默认参数（输出目录、是否移动到 complete 等）
 
