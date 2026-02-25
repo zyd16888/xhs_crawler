@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import threading
 from urllib.parse import urljoin
 
+import random
 import requests
 
 
@@ -105,19 +106,54 @@ class HttpClient:
         last_exc: Exception | None = None
         last_url: str | None = None
 
+        retryable_status_codes = {408, 425, 429, 500, 502, 503, 504}
+        base_backoff_seconds = max(0.5, float(self._sleep_seconds))
+        max_backoff_seconds = 8.0
+
+        def parse_retry_after_seconds(value: str | None) -> float | None:
+            if not value:
+                return None
+            v = value.strip()
+            if not v:
+                return None
+            try:
+                return max(0.0, float(int(v)))
+            except Exception:
+                return None
+
         for base_url in self._base_urls:
             url = urljoin(base_url + "/", path.lstrip("/"))
             last_url = url
             for attempt in range(1, self._retries + 1):
                 try:
                     resp = self._session().get(url, timeout=self._timeout_seconds)
+                    if resp.status_code >= 400:
+                        retry_after = parse_retry_after_seconds(resp.headers.get("Retry-After"))
+                        if resp.status_code in retryable_status_codes and attempt < self._retries:
+                            # Retryable HTTP status; backoff with jitter.
+                            delay = min(max_backoff_seconds, base_backoff_seconds * (2 ** (attempt - 1)))
+                            jitter = random.uniform(0.0, delay * 0.2)
+                            sleep_for = min(max_backoff_seconds, delay + jitter)
+                            if retry_after is not None:
+                                sleep_for = max(sleep_for, min(max_backoff_seconds, retry_after))
+                            time.sleep(sleep_for)
+                            continue
                     resp.raise_for_status()
                     time.sleep(self._sleep_seconds)
                     return FetchResult(url=url, status_code=resp.status_code, text=resp.text)
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
-                    # 简单退避
-                    time.sleep(min(2.0, self._sleep_seconds * attempt))
+                    if isinstance(exc, requests.exceptions.HTTPError):
+                        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                        # Non-retryable HTTP errors: don't retry the same base_url repeatedly.
+                        # Still allow failover to the next base_url.
+                        if status_code is not None and int(status_code) not in retryable_status_codes:
+                            break
+                    if attempt < self._retries:
+                        # 连接抖动/临时错误：指数退避 + 抖动（避免多线程齐刷刷重试）
+                        delay = min(max_backoff_seconds, base_backoff_seconds * (2 ** (attempt - 1)))
+                        jitter = random.uniform(0.0, delay * 0.2)
+                        time.sleep(min(max_backoff_seconds, delay + jitter))
                     continue
 
         raise RuntimeError(f"抓取失败：{last_url}") from last_exc
