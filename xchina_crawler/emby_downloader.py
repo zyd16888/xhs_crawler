@@ -152,6 +152,31 @@ def _clean_title(raw: str) -> str:
     return " - ".join(parts) if parts else s
 
 
+def _strip_trailing_title_tokens(title: str, *, tokens: list[str]) -> str:
+    """
+    从标题末尾剥离一组已知“后缀 token”（通常来自板块/子分类名称）。
+
+    仅在 token 恰好作为以 " - " 分隔的最后若干段时才会剥离，避免误伤标题主体。
+    """
+
+    s = (title or "").strip()
+    if not s:
+        return s
+
+    parts = [p.strip() for p in s.split(" - ") if p.strip()]
+    if not parts:
+        return s
+
+    token_set = {t.strip().lower() for t in (tokens or []) if isinstance(t, str) and t.strip()}
+    if not token_set:
+        return s
+
+    while parts and parts[-1].lower() in token_set:
+        parts.pop()
+
+    return " - ".join(parts) if parts else s
+
+
 def _ext_from_url(url: str) -> str | None:
     try:
         p = urlparse(url).path
@@ -175,6 +200,14 @@ def _download_file(url: str, *, out_path: Path, headers: dict[str, str], timeout
                     continue
                 f.write(chunk)
     tmp_path.replace(out_path)
+
+
+def _copy_file(src: Path, dst: Path, *, force: bool) -> None:
+    if not src.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if force or not dst.exists():
+        shutil.copy2(src, dst)
 
 
 def _format_hhmmss(seconds: float | int) -> str:
@@ -1545,14 +1578,52 @@ def run(argv: list[str] | None = None) -> int:
             title = _clean_title(title)
             series_dir = _safe_name(series_name_for_dir or "Unknown", fallback="Unknown")
             base_name = _safe_name(title, fallback=f"xchina-{v.video_id}")
-            if year:
-                movie_base = f"{base_name} ({year}) [xchina-{v.video_id}]"
-            else:
-                movie_base = f"{base_name} [xchina-{v.video_id}]"
 
             file_title_raw = (vparsed.h1 if vparsed and vparsed.h1 else None) or v.h1 or title
             file_title = _clean_title(file_title_raw)
             file_base = _safe_name(file_title, fallback=f"xchina-{v.video_id}", max_len=_SAFE_FILE_MAX)
+
+            # Directory naming: remove "[xchina-<id>]" suffix for cleaner paths.
+            # Keep backward compatibility by also recognizing legacy paths with the id suffix.
+            movie_base_preferred = f"{base_name} ({year})" if year else f"{base_name}"
+            movie_base_legacy = f"{base_name} ({year}) [xchina-{v.video_id}]" if year else f"{base_name} [xchina-{v.video_id}]"
+
+            preferred_movie_dir = work_root / series_dir / movie_base_preferred
+            preferred_final_movie_dir = final_root / series_dir / movie_base_preferred
+            preferred_video_path = preferred_movie_dir / f"{file_base}.mp4"
+            preferred_final_video_path = preferred_final_movie_dir / f"{file_base}.mp4"
+
+            legacy_movie_dir = work_root / series_dir / movie_base_legacy
+            legacy_final_movie_dir = final_root / series_dir / movie_base_legacy
+            legacy_video_path = legacy_movie_dir / f"{file_base}.mp4"
+            legacy_final_video_path = legacy_final_movie_dir / f"{file_base}.mp4"
+
+            if legacy_final_video_path.exists() and not args.force:
+                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(legacy_final_video_path))
+                return
+
+            if preferred_final_video_path.exists() and not args.force:
+                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(preferred_final_video_path))
+                return
+
+            if (not move_to_complete) and legacy_video_path.exists() and not args.force:
+                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(legacy_video_path))
+                return
+
+            if (not move_to_complete) and preferred_video_path.exists() and not args.force:
+                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(preferred_video_path))
+                return
+
+            def movie_dir_exists(movie_base: str) -> bool:
+                return (work_root / series_dir / movie_base).exists() or (final_root / series_dir / movie_base).exists()
+
+            # Avoid collisions after removing the id suffix (titles may repeat).
+            movie_base = movie_base_preferred
+            if movie_dir_exists(movie_base):
+                i = 2
+                while movie_dir_exists(f"{movie_base_preferred} ({i})"):
+                    i += 1
+                movie_base = f"{movie_base_preferred} ({i})"
 
             movie_dir = work_root / series_dir / movie_base
             final_movie_dir = final_root / series_dir / movie_base
@@ -1561,14 +1632,6 @@ def run(argv: list[str] | None = None) -> int:
             poster_path = movie_dir / "poster"
             extrafanart_dir = movie_dir / "extrafanart"
             nfo_path = video_path.with_suffix(".nfo")
-
-            if final_video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(final_video_path))
-                return
-
-            if (not move_to_complete) and video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(video_path))
-                return
 
             mark_video_download_attempt(db, video_id=v.video_id)
 
@@ -1637,9 +1700,12 @@ def run(argv: list[str] | None = None) -> int:
             if cover:
                 cover_u = urljoin(cfg.base_urls[0] + "/", cover) if cover.startswith("/") else cover
                 ext = _ext_from_url(cover_u) or ".jpg"
-                dst = poster_path.with_suffix(ext)
-                if args.force or not dst.exists():
-                    _download_file(cover_u, out_path=dst, headers=headers, timeout_seconds=cfg.timeout_seconds)
+                poster_dst = poster_path.with_suffix(ext)
+                if args.force or not poster_dst.exists():
+                    _download_file(cover_u, out_path=poster_dst, headers=headers, timeout_seconds=cfg.timeout_seconds)
+                # Emby/Kodi common artwork: add fanart.* and thumb.* by copying poster.*
+                _copy_file(poster_dst, movie_dir / f"fanart{ext}", force=bool(args.force))
+                _copy_file(poster_dst, movie_dir / f"thumb{ext}", force=bool(args.force))
             if screenshot_urls:
                 for i, u in enumerate(screenshot_urls, start=1):
                     u2 = urljoin(cfg.base_urls[0] + "/", u) if u.startswith("/") else u
@@ -1657,11 +1723,27 @@ def run(argv: list[str] | None = None) -> int:
                 tags.append(series_name_for_dir)
             plot = _extract_description(jsonld_obj)
             streamdetails = _ffprobe_streamdetails(video_path)
+            nfo_title_raw = (vparsed.h1 if vparsed and vparsed.h1 else None) or v.h1 or title
+            nfo_title = _clean_title(nfo_title_raw)
+            suffix_tokens: list[str] = []
+            if series_name_for_dir:
+                suffix_tokens.append(series_name_for_dir)
+            if vparsed and vparsed.breadcrumbs:
+                for bc in vparsed.breadcrumbs:
+                    item = getattr(bc, "item", "") or ""
+                    if not _RE_BREADCRUMB_SERIES.search(item):
+                        continue
+                    name = (getattr(bc, "name", "") or "").strip()
+                    if name:
+                        suffix_tokens.append(name)
+            nfo_title = _strip_trailing_title_tokens(nfo_title, tokens=suffix_tokens)
+            if authors:
+                nfo_title = f"{nfo_title} - {', '.join(authors)}"
             if args.force or not nfo_path.exists():
                 _write_movie_nfo(
                     out_path=nfo_path,
                     video_id=v.video_id,
-                    title=title,
+                    title=nfo_title,
                     premiered=premiered,
                     year=year,
                     runtime_minutes=runtime_minutes,
