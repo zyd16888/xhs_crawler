@@ -98,6 +98,7 @@ python3 -m xchina_crawler --config config.yaml crawl-series --series-id 5f904550
 - 默认会先刷新 `/video` 页面以获取最新 `m3u8_url/cover_url/screenshot_url`（避免过期），并回写数据库。
 - 下载完成后会在数据库标记 `downloaded_at/download_status/downloaded_path`，用于避免重复下载（即使你后续把文件上传网盘并删除本地）。
 - 默认会先下载到 `--out/_working/...`，完成后整体移动到 `--out/complete/...`（避免 Emby 扫到半成品）。
+- 若下载过程中出现可忽略的问题（例如部分图片 403），仍会继续生成 NFO 并标记已下载，但会移动到 `download.needs_manual_subdir`（默认 `needs_manual`）等待手工处理；影片目录内会生成 `_NEEDS_MANUAL.txt` 记录失败项。
 - 视频文件名优先使用 `videos.h1`（更易读）；Windows 下会自动截断以降低路径过长风险。
 - NFO 文件名与视频同名（例如 `xxx.mp4` 对应 `xxx.nfo`）。
 - screenshot 会写到 `extrafanart/fanart1.*`；不在影片目录下写 `fanart.*`/`thumb.*`。

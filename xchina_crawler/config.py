@@ -58,6 +58,7 @@ class Config:
         download_concurrent_segments: aria2 单视频分片并发数（默认 16）
         download_aria2c_path: aria2c 可执行文件名或路径（默认 'aria2c'）
         download_max_missing_segments: aria2 模式允许缺失的 ts 分片数量（默认 0）
+        download_needs_manual_subdir: 当下载过程出现可忽略的资源错误（如图片 403）时，移动到该目录等待手工处理
     """
 
     database_url: str
@@ -96,6 +97,7 @@ class Config:
     download_concurrent_segments: int
     download_aria2c_path: str
     download_max_missing_segments: int
+    download_needs_manual_subdir: str
 
 
 def _require_str(obj: dict[str, Any], key: str) -> str:
@@ -336,4 +338,5 @@ def load_config(path: str) -> Config:
         download_concurrent_segments=max(1, _optional_int(download, "concurrent_segments", 16)),
         download_aria2c_path=_optional_str(download, "aria2c_path", "aria2c"),
         download_max_missing_segments=max(0, _optional_int(download, "max_missing_segments", 0)),
+        download_needs_manual_subdir=_optional_str(download, "needs_manual_subdir", "needs_manual"),
     )

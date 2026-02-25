@@ -189,17 +189,33 @@ def _ext_from_url(url: str) -> str | None:
     return ext
 
 
-def _download_file(url: str, *, out_path: Path, headers: dict[str, str], timeout_seconds: int) -> None:
+def _download_file(
+    url: str,
+    *,
+    out_path: Path,
+    headers: dict[str, str],
+    timeout_seconds: int,
+    session: requests.Session | None = None,
+) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + ".part")
-    with requests.get(url, headers=headers, stream=True, timeout=timeout_seconds) as resp:
-        resp.raise_for_status()
-        with tmp_path.open("wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024 * 256):
-                if not chunk:
-                    continue
-                f.write(chunk)
-    tmp_path.replace(out_path)
+    sess = session or requests
+    try:
+        with sess.get(url, headers=headers, stream=True, timeout=timeout_seconds) as resp:
+            resp.raise_for_status()
+            with tmp_path.open("wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 256):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+        tmp_path.replace(out_path)
+    finally:
+        # Cleanup partials on failure (best-effort).
+        if tmp_path.exists() and not out_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
 
 def _copy_file(src: Path, dst: Path, *, force: bool) -> None:
@@ -222,7 +238,12 @@ def _format_hhmmss(seconds: float | int) -> str:
 
 
 def _estimate_m3u8_duration_seconds(
-    url: str, *, headers: dict[str, str], timeout_seconds: int, max_bytes: int = 1_000_000
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout_seconds: int,
+    max_bytes: int = 1_000_000,
+    session: requests.Session | None = None,
 ) -> int | None:
     """
     从 m3u8 清单估算总时长（秒）。
@@ -233,7 +254,8 @@ def _estimate_m3u8_duration_seconds(
     """
 
     def fetch_text(u: str) -> str:
-        with requests.get(u, headers=headers, stream=True, timeout=timeout_seconds) as resp:
+        sess = session or requests
+        with sess.get(u, headers=headers, stream=True, timeout=timeout_seconds) as resp:
             resp.raise_for_status()
             chunks: list[bytes] = []
             size = 0
@@ -1484,6 +1506,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.max_missing_segments is not None
         else max(0, int(cfg.download_max_missing_segments))
     )
+    needs_manual_subdir = (cfg.download_needs_manual_subdir or "needs_manual").strip() or "needs_manual"
 
     out_root = Path(out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -1497,6 +1520,10 @@ def run(argv: list[str] | None = None) -> int:
         final_root.mkdir(parents=True, exist_ok=True)
 
     headers = {"User-Agent": cfg.user_agent, "Referer": cfg.referer}
+    media_session = requests.Session()
+    media_session.trust_env = bool(getattr(cfg, "trust_env", False))
+    if proxies:
+        media_session.proxies.update(proxies)
 
     videos = _load_videos(
         db,
@@ -1633,7 +1660,7 @@ def run(argv: list[str] | None = None) -> int:
                 duration_sec = int(v.duration_seconds)
             if duration_sec is None:
                 duration_sec = _estimate_m3u8_duration_seconds(
-                    m3u8, headers=headers, timeout_seconds=int(cfg.timeout_seconds)
+                    m3u8, headers=headers, timeout_seconds=int(cfg.timeout_seconds), session=media_session
                 )
             if duration_sec is not None and runtime_minutes is None:
                 runtime_minutes = max(1, int(duration_sec // 60))
@@ -1676,6 +1703,7 @@ def run(argv: list[str] | None = None) -> int:
                 )
 
             # images
+            warnings: list[str] = []
             cover = (vparsed.cover_url if vparsed else None) or v.cover_url
             screenshot_urls = screenshot_urls_abs or v.screenshot_urls or []
             if not screenshot_urls:
@@ -1688,7 +1716,16 @@ def run(argv: list[str] | None = None) -> int:
                 ext = _ext_from_url(cover_u) or ".jpg"
                 poster_dst = poster_path.with_suffix(ext)
                 if args.force or not poster_dst.exists():
-                    _download_file(cover_u, out_path=poster_dst, headers=headers, timeout_seconds=cfg.timeout_seconds)
+                    try:
+                        _download_file(
+                            cover_u,
+                            out_path=poster_dst,
+                            headers=headers,
+                            timeout_seconds=cfg.timeout_seconds,
+                            session=media_session,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        warnings.append(f"poster 下载失败 url={cover_u} err={exc}")
                 # Emby/Kodi common artwork: add fanart.* and thumb.* by copying poster.*
                 _copy_file(poster_dst, movie_dir / f"fanart{ext}", force=bool(args.force))
                 _copy_file(poster_dst, movie_dir / f"thumb{ext}", force=bool(args.force))
@@ -1698,7 +1735,16 @@ def run(argv: list[str] | None = None) -> int:
                     ext = _ext_from_url(u2) or ".jpg"
                     dst = extrafanart_dir / f"fanart{i}{ext}"
                     if args.force or not dst.exists():
-                        _download_file(u2, out_path=dst, headers=headers, timeout_seconds=cfg.timeout_seconds)
+                        try:
+                            _download_file(
+                                u2,
+                                out_path=dst,
+                                headers=headers,
+                                timeout_seconds=cfg.timeout_seconds,
+                                session=media_session,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            warnings.append(f"screenshot{i} 下载失败 url={u2} err={exc}")
 
             # nfo
             jsonld_obj = (vparsed.video_object if vparsed else None) or v.jsonld
@@ -1746,19 +1792,33 @@ def run(argv: list[str] | None = None) -> int:
                     streamdetails=streamdetails,
                 )
 
+            if warnings:
+                warn_path = movie_dir / "_NEEDS_MANUAL.txt"
+                warn_path.write_text("\n".join(warnings) + "\n", encoding="utf-8")
+
             final_path = video_path
             if move_to_complete:
-                if final_movie_dir.exists():
+                target_root = final_root
+                if warnings:
+                    target_root = out_root / needs_manual_subdir
+                    target_root.mkdir(parents=True, exist_ok=True)
+                target_movie_dir = target_root / series_dir / movie_base
+                target_video_path = target_movie_dir / f"{file_base}.mp4"
+
+                if target_movie_dir.exists():
                     if args.force:
-                        shutil.rmtree(final_movie_dir)
+                        shutil.rmtree(target_movie_dir)
                     else:
-                        raise RuntimeError(f"目标目录已存在：{final_movie_dir}")
-                final_movie_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(movie_dir), str(final_movie_dir))
-                final_path = final_video_path
+                        raise RuntimeError(f"目标目录已存在：{target_movie_dir}")
+                target_movie_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(movie_dir), str(target_movie_dir))
+                final_path = target_video_path
 
             mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(final_path))
-            renderer.update(v.video_id, f"[{_shorten(title, max_len=name_max)}] 完成 -> {final_path}")
+            if warnings:
+                renderer.update(v.video_id, f"[{_shorten(title, max_len=name_max)}] 需手动处理 -> {final_path}")
+            else:
+                renderer.update(v.video_id, f"[{_shorten(title, max_len=name_max)}] 完成 -> {final_path}")
 
         except Exception as exc:  # noqa: BLE001
             mark_video_download_error(db, video_id=v.video_id, error=str(exc))

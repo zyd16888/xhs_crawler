@@ -85,3 +85,6 @@ download:
 
   # 进度显示的名称最大长度（避免太长刷屏）
   name_max: 28
+
+  # 当出现可忽略的资源错误（例如部分图片 403）时，会移动到该目录等待手工补图/处理
+  needs_manual_subdir: "needs_manual"
