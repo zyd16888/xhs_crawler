@@ -599,19 +599,57 @@ def _parse_video_page_bs4(html: str) -> VideoPageParsed:
     if og and og.get("content"):
         cover_url = str(og.get("content")).strip() or None
 
+    def _extract_first_css_url(style: str) -> str | None:
+        if not style:
+            return None
+        # very small parser: url(...) with optional quotes
+        m = re.search(r"url\(\s*['\"]?([^'\")]+)['\"]?\s*\)", style, re.I)
+        if not m:
+            return None
+        u = (m.group(1) or "").strip()
+        return u or None
+
+    def _is_screenshot_url(u: str) -> bool:
+        s = (u or "").strip()
+        if not s:
+            return False
+        # observed patterns:
+        # - https://.../video-screenshot/<id>_screenshot.jpg
+        # - /screenshot/<id>.jpg
+        return bool(re.search(r"(?:/|-)screenshot/|_screenshot\.", s, re.I))
+
     screenshot_url = None
     screenshot_urls: list[str] = []
     seen_ss: set[str] = set()
-    for img in soup.find_all("img", src=re.compile(r"/screenshot/", re.I)):
-        if not img.get("src"):
-            continue
-        u = str(img.get("src")).strip()
+
+    def add_ss(u: str | None) -> None:
         if not u:
-            continue
-        if u in seen_ss:
-            continue
+            return
+        u = str(u).strip()
+        if not u or u in seen_ss:
+            return
+        if not _is_screenshot_url(u):
+            return
         seen_ss.add(u)
         screenshot_urls.append(u)
+
+    # Common: <img src="...video-screenshot/..."> or lazy-loaded <img data-src="...">
+    for img in soup.find_all("img"):
+        add_ss(img.get("src"))
+        add_ss(img.get("data-src"))
+        add_ss(img.get("data-original"))
+        add_ss(img.get("data-lazy"))
+        add_ss(img.get("data-echo"))
+
+    # Sometimes screenshot is linked: <a href="...video-screenshot/...">
+    for a in soup.find_all("a"):
+        add_ss(a.get("href"))
+
+    # Sometimes screenshot is a background-image
+    for el in soup.find_all(style=True):
+        u = _extract_first_css_url(str(el.get("style") or ""))
+        add_ss(u)
+
     if screenshot_urls:
         screenshot_url = screenshot_urls[0]
 
