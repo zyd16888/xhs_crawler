@@ -1172,6 +1172,7 @@ def _write_movie_nfo(
     out_path: Path,
     video_id: str,
     title: str,
+    original_title: str,
     premiered: str | None,
     year: int | None,
     runtime_minutes: int | None,
@@ -1185,7 +1186,7 @@ def _write_movie_nfo(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', "<movie>"]
     lines.append(f"  <title>{_xml_escape(title)}</title>")
-    lines.append(f"  <originaltitle>{_xml_escape(title)}</originaltitle>")
+    lines.append(f"  <originaltitle>{_xml_escape(original_title)}</originaltitle>")
     lines.append(f'  <uniqueid type="xchina" default="true">{_xml_escape(video_id)}</uniqueid>')
     if premiered:
         lines.append(f"  <premiered>{_xml_escape(premiered)}</premiered>")
@@ -1583,47 +1584,32 @@ def run(argv: list[str] | None = None) -> int:
             file_title = _clean_title(file_title_raw)
             file_base = _safe_name(file_title, fallback=f"xchina-{v.video_id}", max_len=_SAFE_FILE_MAX)
 
-            # Directory naming: remove "[xchina-<id>]" suffix for cleaner paths.
-            # Keep backward compatibility by also recognizing legacy paths with the id suffix.
-            movie_base_preferred = f"{base_name} ({year})" if year else f"{base_name}"
-            movie_base_legacy = f"{base_name} ({year}) [xchina-{v.video_id}]" if year else f"{base_name} [xchina-{v.video_id}]"
+            # Directory naming:
+            # - preferred: append "[<id>]" to make it easy to locate problematic items
+            # - legacy support: also recognize old "[xchina-<id>]" and older no-id folders
+            movie_base_preferred = f"{base_name} ({year}) [{v.video_id}]" if year else f"{base_name} [{v.video_id}]"
+            movie_base_legacy_xchina = (
+                f"{base_name} ({year}) [xchina-{v.video_id}]" if year else f"{base_name} [xchina-{v.video_id}]"
+            )
+            movie_base_legacy_noid = f"{base_name} ({year})" if year else f"{base_name}"
 
-            preferred_movie_dir = work_root / series_dir / movie_base_preferred
-            preferred_final_movie_dir = final_root / series_dir / movie_base_preferred
-            preferred_video_path = preferred_movie_dir / f"{file_base}.mp4"
-            preferred_final_video_path = preferred_final_movie_dir / f"{file_base}.mp4"
+            def existing_video_path(movie_base: str) -> Path | None:
+                wd = work_root / series_dir / movie_base / f"{file_base}.mp4"
+                fd = final_root / series_dir / movie_base / f"{file_base}.mp4"
+                if fd.exists():
+                    return fd
+                if (not move_to_complete) and wd.exists():
+                    return wd
+                return None
 
-            legacy_movie_dir = work_root / series_dir / movie_base_legacy
-            legacy_final_movie_dir = final_root / series_dir / movie_base_legacy
-            legacy_video_path = legacy_movie_dir / f"{file_base}.mp4"
-            legacy_final_video_path = legacy_final_movie_dir / f"{file_base}.mp4"
+            if not args.force:
+                for mb in (movie_base_preferred, movie_base_legacy_xchina, movie_base_legacy_noid):
+                    hit = existing_video_path(mb)
+                    if hit:
+                        mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(hit))
+                        return
 
-            if legacy_final_video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(legacy_final_video_path))
-                return
-
-            if preferred_final_video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(preferred_final_video_path))
-                return
-
-            if (not move_to_complete) and legacy_video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(legacy_video_path))
-                return
-
-            if (not move_to_complete) and preferred_video_path.exists() and not args.force:
-                mark_video_download_done(db, video_id=v.video_id, downloaded_path=str(preferred_video_path))
-                return
-
-            def movie_dir_exists(movie_base: str) -> bool:
-                return (work_root / series_dir / movie_base).exists() or (final_root / series_dir / movie_base).exists()
-
-            # Avoid collisions after removing the id suffix (titles may repeat).
             movie_base = movie_base_preferred
-            if movie_dir_exists(movie_base):
-                i = 2
-                while movie_dir_exists(f"{movie_base_preferred} ({i})"):
-                    i += 1
-                movie_base = f"{movie_base_preferred} ({i})"
 
             movie_dir = work_root / series_dir / movie_base
             final_movie_dir = final_root / series_dir / movie_base
@@ -1724,7 +1710,7 @@ def run(argv: list[str] | None = None) -> int:
             plot = _extract_description(jsonld_obj)
             streamdetails = _ffprobe_streamdetails(video_path)
             nfo_title_raw = (vparsed.h1 if vparsed and vparsed.h1 else None) or v.h1 or title
-            nfo_title = _clean_title(nfo_title_raw)
+            nfo_original_title = _clean_title(nfo_title_raw)
             suffix_tokens: list[str] = []
             if series_name_for_dir:
                 suffix_tokens.append(series_name_for_dir)
@@ -1736,14 +1722,19 @@ def run(argv: list[str] | None = None) -> int:
                     name = (getattr(bc, "name", "") or "").strip()
                     if name:
                         suffix_tokens.append(name)
-            nfo_title = _strip_trailing_title_tokens(nfo_title, tokens=suffix_tokens)
-            if authors:
-                nfo_title = f"{nfo_title} - {', '.join(authors)}"
+            nfo_original_title = _strip_trailing_title_tokens(nfo_original_title, tokens=suffix_tokens)
+
+            # User preference: keep <originaltitle> as pure h1; only append performer name(s) to <title>.
+            nfo_title = nfo_original_title
+            if actors:
+                # Common case is a single performer name; join with spaces if multiple.
+                nfo_title = f"{nfo_title} {' '.join(actors)}"
             if args.force or not nfo_path.exists():
                 _write_movie_nfo(
                     out_path=nfo_path,
                     video_id=v.video_id,
                     title=nfo_title,
+                    original_title=nfo_original_title,
                     premiered=premiered,
                     year=year,
                     runtime_minutes=runtime_minutes,
