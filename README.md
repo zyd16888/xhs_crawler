@@ -138,3 +138,44 @@ python3 -m xchina_crawler.emby_downloader --config config.yaml --out "/path/to/M
 ```bash
 python3 -m xchina_crawler.emby_downloader --config config.yaml
 ```
+
+## needs_manual 补图（CF 盾）
+
+当下载器遇到图片 403 等可忽略问题时，会把影片目录移动到 `needs_manual`（可配置 `download.needs_manual_subdir`），并在目录里写 `_NEEDS_MANUAL.txt`。
+
+可以用 DrissionPage 打开浏览器手动过一次 Cloudflare 验证，然后批量把缺失图片补齐：
+
+```bash
+pip install -r requirements.manual.txt
+python3 -m xchina_crawler.needs_manual_dp --config config.yaml --needs-manual-dir "/path/to/MediaRoot/needs_manual"
+```
+
+如果遇到 “浏览器能打开但 download() 仍 403”，推荐直接改用 “浏览器响应落盘（通过 DrissionPage.listen 抓包）”：
+
+```bash
+python3 -m xchina_crawler.needs_manual_dp --config config.yaml --needs-manual-dir "/path/to/MediaRoot/needs_manual" --download-via browser
+```
+
+图片较多时可开启多标签页并发（更快）：
+
+```bash
+python3 -m xchina_crawler.needs_manual_dp --config config.yaml --needs-manual-dir "/path/to/MediaRoot/needs_manual" --download-via browser --tabs 4
+```
+
+可选：补齐后自动移动回 complete：
+
+```bash
+python3 -m xchina_crawler.needs_manual_dp --config config.yaml --needs-manual-dir "/path/to/MediaRoot/needs_manual" --move-to-complete
+``` 
+
+
+
+
+
+
+
+
+
+
+
+
