@@ -229,7 +229,7 @@ def _sync_to_session(page) -> None:
         pass
 
 
-def _browser_warmup_and_prompt(page, url: str, *, wait_seconds: float) -> None:
+def _browser_warmup_and_prompt(page, url: str, *, wait_seconds: float, sync_session: bool) -> None:
     """
     首次 warmup：打开一个资源 URL，让用户有机会处理/等待 CF 盾，然后按回车继续。
     """
@@ -256,7 +256,8 @@ def _browser_warmup_and_prompt(page, url: str, *, wait_seconds: float) -> None:
 
     print("如果出现 Cloudflare 验证，请在浏览器里手动点击/完成验证；或等待其自动跳过。完成后回到终端按回车继续。")
     input("继续（回车）> ")
-    _sync_to_session(page)
+    if sync_session:
+        _sync_to_session(page)
 
 
 def _download_one(
@@ -294,12 +295,11 @@ def _download_one(
 
 
 def _download_via_browser_response(
-    page,
+    tab,
     *,
     url: str,
     dest_path: Path,
     overwrite: bool,
-    new_tab: bool,
     wait_seconds: float,
 ) -> bool:
     """
@@ -312,40 +312,10 @@ def _download_via_browser_response(
         return True
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 确保在浏览器模式
-    try:
-        page.change_mode("d", go=False)
-    except Exception:
-        try:
-            page.change_mode("d")
-        except Exception:
-            pass
-
-    tab = page
-    opened_new = False
-    if new_tab:
-        nt = getattr(page, "new_tab", None)
-        if callable(nt):
-            try:
-                tab = nt(url)
-                opened_new = True
-            except TypeError:
-                try:
-                    tab = nt()
-                    getattr(tab, "get")(url)  # type: ignore[attr-defined]
-                    opened_new = True
-                except Exception:
-                    tab = page
-                    opened_new = False
-            except Exception:
-                tab = page
-                opened_new = False
-
     try:
         listener = getattr(tab, "listen", None)
         if listener is None:
             print("[browser-resp] 当前 DrissionPage 版本不支持 listen 监听器，无法用浏览器响应落盘。")
-            _sync_to_session(page)
             return False
 
         try:
@@ -356,7 +326,6 @@ def _download_via_browser_response(
                 listener.start(True)
             except Exception as exc:  # noqa: BLE001
                 print(f"[browser-resp] 启动监听失败：{exc}")
-                _sync_to_session(page)
                 return False
 
         try:
@@ -389,7 +358,6 @@ def _download_via_browser_response(
 
         if not pkt:
             print(f"[browser-resp] 获取失败（未捕获到数据包）：{url}")
-            _sync_to_session(page)
             return False
 
         # 如果监听所有，可能拿到的不是目标 URL，做一次兜底匹配
@@ -406,18 +374,26 @@ def _download_via_browser_response(
         resp = getattr(pkt, "response", None)
         status = getattr(resp, "status", None) if resp is not None else None
         body = getattr(resp, "body", None) if resp is not None else None
+        headers = getattr(resp, "headers", None) if resp is not None else None
         if status is not None and int(status) >= 400:
             print(f"[browser-resp] 获取失败：status={status} url={url}")
-            _sync_to_session(page)
             return False
         if not isinstance(body, (bytes, bytearray)):
             print(f"[browser-resp] 获取失败：body 类型异常 {type(body).__name__} url={url}")
-            _sync_to_session(page)
             return False
         data = bytes(body)
         if not data:
             print(f"[browser-resp] 获取失败：空 body url={url}")
-            _sync_to_session(page)
+            return False
+        # 兜底：若拿到的是 HTML（常见 CF/跳转页），直接视为失败
+        ctype = ""
+        try:
+            if isinstance(headers, dict):
+                ctype = str(headers.get("content-type") or headers.get("Content-Type") or "")
+        except Exception:
+            ctype = ""
+        if ("text/html" in ctype.lower()) or data[:20].lstrip().lower().startswith(b"<"):
+            print(f"[browser-resp] 获取失败（疑似 HTML/盾页）：url={url}")
             return False
 
     finally:
@@ -425,13 +401,6 @@ def _download_via_browser_response(
         try:
             if "listener" in locals() and listener is not None:
                 listener.stop()
-        except Exception:
-            pass
-
-    # best-effort close tab
-    if opened_new:
-        try:
-            getattr(tab, "close")()  # type: ignore[attr-defined]
         except Exception:
             pass
 
@@ -448,10 +417,8 @@ def _download_via_browser_response(
                 tmp_path.unlink()
         except Exception:
             pass
-        _sync_to_session(page)
         return False
 
-    _sync_to_session(page)
     try:
         return dest_path.exists() and dest_path.stat().st_size > 0
     except Exception:
@@ -485,8 +452,9 @@ def run(argv: list[str] | None = None) -> int:
         "--download-via",
         choices=["auto", "session", "browser"],
         default="auto",
-        help="下载方式：auto=先 session(download) 失败则用浏览器页面提取落盘；session=仅用 download；browser=仅用浏览器页面提取（默认 auto）",
+        help="下载方式：auto=先 session(download) 失败则用浏览器响应落盘；session=仅用 download；browser=仅用浏览器响应（默认 auto）",
     )
+    ap.add_argument("--tabs", type=int, default=1, help="并发标签页数量（仅 download-via=browser 或 auto->browser 时有效；默认 1）")
     ap.add_argument("--retry-times", type=int, default=2, help="下载失败后最多重试次数（配合 browser-visit；默认 2）")
     ap.add_argument(
         "--move-to-complete",
@@ -563,11 +531,29 @@ def run(argv: list[str] | None = None) -> int:
 
     page = WebPage(mode="d", chromium_options=co, session_or_options=so, timeout=float(cfg.timeout_seconds))
     try:
+        tabs = max(1, int(args.tabs) if args.tabs is not None else 1)
+        download_via = str(args.download_via or "auto").strip()
+        if tabs > 1:
+            if download_via == "session":
+                print("[提示] --download-via=session 不支持多标签并发，已忽略 --tabs（降为 1）。")
+                tabs = 1
+            elif download_via == "auto":
+                print("[提示] --download-via=auto 且 --tabs>1 时，将直接使用浏览器响应落盘（等价于 --download-via=browser）。")
+                download_via = "browser"
+
+        sync_session = (download_via in ("session", "auto")) and tabs <= 1
+
         if args.warmup and warmup_url:
             print(f"将打开浏览器访问（warmup）：{warmup_url}")
-            _browser_warmup_and_prompt(page, warmup_url, wait_seconds=float(args.browser_wait_seconds))
+            _browser_warmup_and_prompt(
+                page,
+                warmup_url,
+                wait_seconds=float(args.browser_wait_seconds),
+                sync_session=bool(sync_session),
+            )
         else:
-            _sync_to_session(page)
+            if sync_session:
+                _sync_to_session(page)
 
         # Slightly higher retry tolerance in session mode.
         try:
@@ -580,6 +566,52 @@ def run(argv: list[str] | None = None) -> int:
         complete_subdir = (cfg.download_complete_subdir or "complete").strip() or "complete"
         complete_dir = out_root / complete_subdir
 
+        use_parallel_tabs = (download_via == "browser") and tabs > 1
+        tab_pool = None
+        if use_parallel_tabs:
+            try:
+                from queue import Queue
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError("并发下载需要 queue/concurrent.futures（标准库）。") from exc
+
+            if args.browser_new_tab:
+                print("[提示] 已启用 --tabs，多标签并发场景下会复用标签页进行下载；--browser-new-tab 将被忽略。")
+
+            tab_pool = Queue()
+            tabs_list = [page]
+            for _ in range(tabs - 1):
+                try:
+                    tabs_list.append(page.new_tab())
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[警告] 创建新标签页失败，将降级并发：{exc}")
+                    break
+            for t in tabs_list:
+                tab_pool.put(t)
+
+            def _download_issue_in_pool(it: ManualIssue) -> bool:
+                tab = tab_pool.get()
+                try:
+                    attempts = max(1, int(args.retry_times) if args.retry_times is not None else 1)
+                    for attempt in range(attempts):
+                        if attempt > 0:
+                            print(f"[重试] 第 {attempt + 1}/{attempts} 次：{it.url}")
+                        ok = _download_via_browser_response(
+                            tab,
+                            url=it.url,
+                            dest_path=it.dest_path,
+                            overwrite=bool(args.overwrite),
+                            wait_seconds=float(args.browser_wait_seconds),
+                        )
+                        if ok:
+                            return True
+                    return False
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[失败] {it.url} -> {it.dest_path} err={exc}")
+                    return False
+                finally:
+                    tab_pool.put(tab)
+
         for issue_file, issues in all_issues:
             movie_dir = issue_file.parent
             remaining_lines = issue_file.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -588,71 +620,102 @@ def run(argv: list[str] | None = None) -> int:
             # Build a map of raw_line -> issue for filtering.
             issue_by_line = {it.raw_line: it for it in issues}
 
-            for line in remaining_lines:
-                it = issue_by_line.get(line)
-                if not it:
-                    keep_lines.append(line)
-                    continue
+            if use_parallel_tabs and tab_pool is not None:
+                # 并发模式：只走浏览器响应落盘
+                todo: list[ManualIssue] = []
+                for line in remaining_lines:
+                    it = issue_by_line.get(line)
+                    if not it:
+                        continue
+                    if it.dest_path.exists() and not args.overwrite:
+                        continue
+                    todo.append(it)
 
-                if it.dest_path.exists() and not args.overwrite:
-                    continue
+                results: dict[str, bool] = {}
+                if todo:
+                    max_workers = min(tabs, len(todo))
+                    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                        fut_map = {ex.submit(_download_issue_in_pool, it): it for it in todo}
+                        for fut in as_completed(fut_map):
+                            it = fut_map[fut]
+                            try:
+                                results[it.raw_line] = bool(fut.result())
+                            except Exception:
+                                results[it.raw_line] = False
 
-                referer = _infer_referer(cfg, movie_dir)
-                headers = _default_download_headers(user_agent=cfg.user_agent, referer=(referer or cfg.referer))
+                # 回写 keep_lines + poster variants
+                for line in remaining_lines:
+                    it = issue_by_line.get(line)
+                    if not it:
+                        keep_lines.append(line)
+                        continue
+                    if it.dest_path.exists() and not args.overwrite:
+                        continue
+                    ok = bool(results.get(it.raw_line))
+                    if not ok:
+                        keep_lines.append(line)
+                        continue
+                    _ensure_dest_exists(it.dest_path)
+                    if it.kind == "poster":
+                        _copy_poster_variants(it.dest_path, force=bool(args.overwrite))
+            else:
+                # 顺序模式：支持 session/auto/browser
+                for line in remaining_lines:
+                    it = issue_by_line.get(line)
+                    if not it:
+                        keep_lines.append(line)
+                        continue
 
-                attempts = max(1, int(args.retry_times) if args.retry_times is not None else 1)
-                ok = False
-                for attempt in range(attempts):
-                    if attempt > 0:
-                        print(f"[重试] 第 {attempt + 1}/{attempts} 次：{it.url}")
+                    if it.dest_path.exists() and not args.overwrite:
+                        continue
 
-                    if args.browser_visit == "all":
-                        _browser_visit_and_sync(
-                            page,
-                            it.url,
-                            new_tab=bool(args.browser_new_tab),
-                            wait_seconds=float(args.browser_wait_seconds),
-                        )
+                    referer = _infer_referer(cfg, movie_dir)
+                    headers = _default_download_headers(user_agent=cfg.user_agent, referer=(referer or cfg.referer))
 
-                    if args.download_via in ("session", "auto"):
-                        ok = _download_one(
-                            page,
-                            url=it.url,
-                            dest_path=it.dest_path,
-                            overwrite=bool(args.overwrite),
-                            headers=headers,
-                            timeout_seconds=float(cfg.timeout_seconds),
-                        )
-                        if ok:
-                            break
+                    attempts = max(1, int(args.retry_times) if args.retry_times is not None else 1)
+                    ok = False
+                    for attempt in range(attempts):
+                        if attempt > 0:
+                            print(f"[重试] 第 {attempt + 1}/{attempts} 次：{it.url}")
 
-                    # session(download) 失败（常见 403）时，按策略让浏览器先访问一下刷新盾，再走“浏览器响应落盘”
-                    if args.browser_visit == "on-403":
-                        _browser_visit_and_sync(
-                            page,
-                            it.url,
-                            new_tab=bool(args.browser_new_tab),
-                            wait_seconds=float(args.browser_wait_seconds),
-                        )
+                        if args.browser_visit == "all" and sync_session:
+                            _browser_visit_and_sync(
+                                page,
+                                it.url,
+                                new_tab=bool(args.browser_new_tab),
+                                wait_seconds=float(args.browser_wait_seconds),
+                            )
 
-                    if args.download_via in ("browser", "auto"):
-                        ok = _download_via_browser_response(
-                            page,
-                            url=it.url,
-                            dest_path=it.dest_path,
-                            overwrite=bool(args.overwrite),
-                            new_tab=bool(args.browser_new_tab),
-                            wait_seconds=float(args.browser_wait_seconds),
-                        )
-                        if ok:
-                            break
+                        if download_via in ("session", "auto"):
+                            ok = _download_one(
+                                page,
+                                url=it.url,
+                                dest_path=it.dest_path,
+                                overwrite=bool(args.overwrite),
+                                headers=headers,
+                                timeout_seconds=float(cfg.timeout_seconds),
+                            )
+                            if ok:
+                                break
 
-                if not ok:
-                    keep_lines.append(line)
-                    continue
+                        if download_via in ("browser", "auto"):
+                            ok = _download_via_browser_response(
+                                page,
+                                url=it.url,
+                                dest_path=it.dest_path,
+                                overwrite=bool(args.overwrite),
+                                wait_seconds=float(args.browser_wait_seconds),
+                            )
+                            if ok:
+                                break
 
-                if it.kind == "poster":
-                    _copy_poster_variants(it.dest_path, force=bool(args.overwrite))
+                    if not ok:
+                        keep_lines.append(line)
+                        continue
+
+                    _ensure_dest_exists(it.dest_path)
+                    if it.kind == "poster":
+                        _copy_poster_variants(it.dest_path, force=bool(args.overwrite))
 
             if keep_lines:
                 issue_file.write_text("\n".join(keep_lines) + "\n", encoding="utf-8")
